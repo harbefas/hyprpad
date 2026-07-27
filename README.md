@@ -23,6 +23,18 @@ python3 hyprpad.py
 
 Open `http://<this-machine-ip>:8123` on your phone, same network.
 
+To keep it running (auto-starts on graphical login, restarts on crash):
+
+```
+mkdir -p ~/.config/systemd/user
+cp systemd/hyprpad.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now hyprpad.service
+```
+
+(Edit the `ExecStart`/`WorkingDirectory` paths in the unit if you cloned
+this repo somewhere other than `~/hyprpad`.)
+
 Env vars:
 - `HYPRPAD_PORT` — default `8123`.
 - `HYPRPAD_PASSWORD` — if set, requires login (cookie persists after).

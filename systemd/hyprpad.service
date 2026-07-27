@@ -1,0 +1,13 @@
+[Unit]
+Description=hyprpad — Wayland remote (mouse/keyboard/trackpad) control
+After=graphical-session.target
+
+[Service]
+# adjust the path if you cloned this repo somewhere other than ~/hyprpad
+ExecStart=/usr/bin/python3 %h/hyprpad/hyprpad.py
+WorkingDirectory=%h/hyprpad
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
