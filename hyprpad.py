@@ -350,8 +350,8 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);
   text-align:center;overflow-y:auto}
 body[data-media] #medview{display:flex}
 body[data-media] #deskmain{display:none}
-#mcover{width:min(60vw,220px);height:min(60vw,220px);object-fit:cover;border-radius:16px;
-  background:var(--surface);display:none;flex:0 0 auto}
+#mcover{width:min(60vw,220px);height:min(60vw,220px);object-fit:contain;border-radius:16px;
+  display:none;flex:0 0 auto}
 #mcover[src]{display:block}
 #mtitle{font-size:18px;font-weight:700;max-width:80vw;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;color:var(--tx)}
@@ -363,6 +363,14 @@ body[data-media] #deskmain{display:none}
 #mctrls button{width:56px;height:56px;border-radius:8px;font-size:20px}
 #mvol button{width:40px;height:40px;border-radius:8px;font-size:18px;padding:0}
 #mvolval{color:var(--tx-2);font-size:13px;min-width:34px}
+#mctrlcol{display:contents}
+@media (orientation:landscape){
+  #medview{flex-direction:row;text-align:left;padding:0;gap:0}
+  #mcover{order:2;flex:1 1 auto;width:auto;height:auto;max-width:none;max-height:none;
+    border-radius:14px;align-self:stretch;margin:10px 14px 14px -20px}
+  #mctrlcol{display:flex;order:1;flex:0 0 56%;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;padding:20px;text-align:center}
+}
 #mclose{position:absolute;top:calc(env(safe-area-inset-top,0px) + 14px);left:14px;
   padding:9px 16px;border-radius:8px}
 #mplayers{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:85vw}
@@ -464,19 +472,21 @@ body[data-screen] #deskkeys{flex:0 0 auto;padding-top:8px}   /* with the live sc
     </div>
   </div>
   <div id=medview>
-    <div id=mplayers></div>
     <img id=mcover alt="">
-    <div id=mtitle></div>
-    <div id=martist></div>
-    <div id=mctrls>
-      <button id=mprev aria-label=previous>⏮</button>
-      <button id=mplay aria-label="play/pause">⏯</button>
-      <button id=mnext aria-label=next>⏭</button>
-    </div>
-    <div id=mvol>
-      <button id=mvoldown aria-label="volume down">−</button>
-      <span id=mvolval></span>
-      <button id=mvolup aria-label="volume up">+</button>
+    <div id=mctrlcol>
+      <div id=mplayers></div>
+      <div id=mtitle></div>
+      <div id=martist></div>
+      <div id=mctrls>
+        <button id=mprev aria-label=previous>⏮</button>
+        <button id=mplay aria-label="play/pause">⏯</button>
+        <button id=mnext aria-label=next>⏭</button>
+      </div>
+      <div id=mvol>
+        <button id=mvoldown aria-label="volume down">−</button>
+        <span id=mvolval></span>
+        <button id=mvolup aria-label="volume up">+</button>
+      </div>
     </div>
     <button id=mclose>Back</button>
   </div>
@@ -582,11 +592,23 @@ function stopDeskScreen(){if(deskT){clearInterval(deskT);deskT=null;}}
   const showEcho=()=>{ kbechot.textContent=(kbin.value||'').slice(-48); };
   // bar visibility controlled ONLY here (not on focus/blur: on Android those
   // fire spuriously with prediction and made the bar flicker).
+  let openedAt=0;
   const openKb=()=>{ kbin.value=''; kblast=''; showEcho();
-    kbecho.classList.add('on'); kbt.classList.add('on'); kbin.focus(); };
+    kbecho.classList.add('on'); kbt.classList.add('on'); kbin.focus(); openedAt=Date.now(); };
   const closeKb=()=>{ kbin.blur(); kbecho.classList.remove('on'); kbt.classList.remove('on'); };
   kbt.onclick=()=>{ kbt.classList.contains('on')?closeKb():openKb(); };
   tpad.addEventListener('dblclick',openKb);
+  // if the phone's own keyboard gets dismissed some other way (back button,
+  // swipe away, ...) close our echo bar too instead of leaving it stuck open.
+  // Ignore the first ~600ms after opening: the viewport hasn't finished
+  // animating up yet and would otherwise look like an immediate close.
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize',()=>{
+      if(Date.now()-openedAt<600) return;
+      const kb=Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+      if(kb<=90 && kbecho.classList.contains('on')) closeKb();
+    });
+  }
   // capture by DIFF on the 'input' event (every Android keyboard fires input;
   // beforeinput/keydown don't always fire, e.g. LineageOS' AOSP keyboard)
   // DIFF on value: inputmode=email gives a keyboard with no prediction (letters
