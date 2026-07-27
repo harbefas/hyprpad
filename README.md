@@ -4,15 +4,22 @@ Turn your phone into a mouse, keyboard and trackpad for a Wayland desktop
 (Hyprland/Sway). Open a page in your phone's browser, no app to install on
 either side.
 
-- Trackpad: drag to move, tap to click, two fingers (or the `✌` hold-button)
-  to scroll / right-click.
-- Native keyboard capture: tap `⌨ Digitar` and type with your phone's own
-  keyboard.
+- Trackpad: drag to move, tap to click, two fingers (or the `2F` hold-button)
+  to scroll / right-click, `DRAG` hold-button for click-and-drag.
+- Native keyboard capture: tap `Type` and type with your phone's own keyboard.
 - Modifier keys, arrow keys (hold to repeat), Esc/Tab/Enter/Backspace/PrtSc.
 - Configurable shortcut buttons (`SHORTCUTS` array in `hyprpad.py`) — add
-  your own combo without touching layout.
-- Optional live screenshot of the desktop (`👁 Tela`, via `grim`) so you can
+  your own combo without touching layout. Copy/Paste and Super+C ship by default.
+- Optional live screenshot of the desktop (`Screen`, via `grim`) so you can
   see where the cursor is.
+- Media control panel (via `playerctl`/MPRIS): a `Media` button appears only
+  while something's playing (Spotify, a YouTube tab, mpv, ...) and opens a
+  panel with cover art, title/artist, transport controls and volume. If more
+  than one player is active at once, a switcher lets you pick which to control.
+- On [Omarchy](https://omarchy.org), the UI follows your active theme live
+  (reads `~/.config/omarchy/current/theme/colors.toml`, cached until you
+  switch themes). Elsewhere it falls back to a built-in Yerba Mate palette
+  that follows time of day.
 - Installable as a PWA (add to home screen) for a fullscreen, app-like feel.
 
 ## Run
@@ -42,8 +49,9 @@ Env vars:
 
 ## Requirements
 
-- Python 3 + [`python-evdev`](https://python-evdev.readthedocs.io/)
+- Python 3.11+ (uses stdlib `tomllib`) + [`python-evdev`](https://python-evdev.readthedocs.io/)
 - `grim` (optional, only for the live screen preview — wlroots compositors)
+- `playerctl` (optional, only for the media control panel)
 - Your user in the `input` group + a udev rule granting access to
   `/dev/uinput`:
 
