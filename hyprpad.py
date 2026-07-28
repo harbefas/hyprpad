@@ -19,6 +19,7 @@ import mimetypes
 import os
 import struct
 import subprocess
+import tempfile
 import tomllib
 import zlib
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -164,6 +165,42 @@ def kbd_send(d):
     for k in reversed(mods):
         KBD.write(e.EV_KEY, k, 0)
     KBD.syn()
+
+
+# --- voice: record on the phone, transcribe + type here (lazy-loaded, optional) ---
+_WHISPER = None  # None = not loaded yet, False = unavailable
+
+
+def _voice_model():
+    global _WHISPER
+    if _WHISPER is False:
+        return None
+    if _WHISPER is None:
+        try:
+            from faster_whisper import WhisperModel
+            _WHISPER = WhisperModel("base.en", device="cpu", compute_type="int8")
+        except Exception as ex:
+            print(f"[warn] voice off ({ex}); pip install faster-whisper (ou AUR "
+                  "python-faster-whisper) pra habilitar.")
+            _WHISPER = False
+            return None
+    return _WHISPER
+
+
+def transcribe_and_type(audio_bytes):
+    """Transcribes a recorded clip and types the result via the virtual keyboard.
+    Returns the transcribed text (empty string if voice is unavailable)."""
+    model = _voice_model()
+    if not model or not audio_bytes:
+        return ""
+    with tempfile.NamedTemporaryFile(suffix=".webm") as f:
+        f.write(audio_bytes)
+        f.flush()
+        segments, _ = model.transcribe(f.name)
+        text = "".join(s.text for s in segments).strip()
+    for ch in text:
+        kbd_send({"char": ch})
+    return text
 
 
 MEDIA_ACTIONS = {"play-pause", "next", "previous"}
@@ -443,6 +480,7 @@ body[data-screen] #deskkeys{flex:0 0 auto;padding-top:8px}   /* with the live sc
       <div class=deskgroup id=modegrp>
         <button id=kbtoggle>Type</button>
         <button id=screentoggle>Screen</button>
+        <button id=voicetoggle>Voice</button>
         <button id=mediatoggle style=display:none>Media</button>
       </div>
       <div class=deskgroup id=navgrp>
@@ -490,7 +528,7 @@ body[data-screen] #deskkeys{flex:0 0 auto;padding-top:8px}   /* with the live sc
     </div>
     <button id=mclose>Back</button>
   </div>
-  <input id=kbin type=text inputmode=email autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  <input id=kbin type=text inputmode=email autocomplete=new-password autocapitalize=off autocorrect=off spellcheck=false>
   <div id=kbecho><span id=kbechot></span><span id=kbcaret></span></div>
 </div>
 
@@ -639,6 +677,36 @@ function stopDeskScreen(){if(deskT){clearInterval(deskT);deskT=null;}}
     b.onclick=()=>{buzz();key({char:ch,mods:activeMods()});clearMods();};}
   for(const b of document.querySelectorAll('#deskkeys button[data-mod]')){const mo=b.dataset.mod;
     b.onclick=()=>{mods[mo]=!mods[mo];b.classList.toggle('on',mods[mo]);buzz();};}
+})();
+
+// ---------- voice: hold the button to record, release to send for local transcription + typing ----------
+(function(){
+  const vt=document.getElementById('voicetoggle'); if(!vt) return;
+  if(!(navigator.mediaDevices && window.MediaRecorder)){ vt.style.display='none'; return; }
+  let recorder=null, chunks=[], stream=null;
+  const label=t=>{vt.textContent=t;};
+  const start=async ev=>{
+    ev.preventDefault();
+    if(recorder) return;
+    try{ stream=await navigator.mediaDevices.getUserMedia({audio:true}); }
+    catch(err){ label(err.name||'no mic'); console.error('hyprpad voice:',err); setTimeout(()=>label('Voice'),3000); return; }
+    chunks=[];
+    recorder=new MediaRecorder(stream);
+    recorder.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+    recorder.onstop=()=>{
+      stream.getTracks().forEach(t=>t.stop()); stream=null;
+      const blob=new Blob(chunks,{type:'audio/webm'});
+      vt.classList.remove('on'); label('…');
+      fetch('/api/voice',{method:'POST',body:blob})
+        .then(()=>label('Voice')).catch(()=>label('Voice'));
+      recorder=null;
+    };
+    recorder.start(); vt.classList.add('on'); buzz(15); label('● rec');
+  };
+  const stop=()=>{ if(recorder && recorder.state==='recording') recorder.stop(); };
+  vt.addEventListener('touchstart',start,{passive:false});
+  vt.addEventListener('touchend',stop); vt.addEventListener('touchcancel',stop);
+  vt.addEventListener('mousedown',start); vt.addEventListener('mouseup',stop); vt.addEventListener('mouseleave',stop);
 })();
 
 // ---------- media button: only shown while something's actually playable (MPRIS/playerctl) ----------
@@ -875,6 +943,17 @@ class Handler(BaseHTTPRequestHandler):
             if media_control(d.get("action", ""), d.get("player")):
                 self.send_response(204); self.end_headers()
             else:
+                self.send_response(400); self.end_headers()
+        elif path == "/api/voice":
+            try:
+                text = transcribe_and_type(raw)
+                body = json.dumps({"text": text}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
                 self.send_response(400); self.end_headers()
         else:
             self.send_response(404); self.end_headers()
