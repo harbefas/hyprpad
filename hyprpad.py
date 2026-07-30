@@ -297,6 +297,18 @@ def media_control(action, want=None):
         return False
 
 
+def active_window_class():
+    """Focused window's app class via hyprctl (Hyprland only). None if
+    unavailable (other compositor, hyprctl missing, nothing focused)."""
+    try:
+        r = subprocess.run(["hyprctl", "activewindow", "-j"], capture_output=True, text=True, timeout=2)
+        if r.returncode != 0:
+            return None
+        return json.loads(r.stdout).get("class") or None
+    except Exception:
+        return None
+
+
 def screen_frame():
     """Current screenshot via grim (wlroots), downscaled JPEG to fit over wifi."""
     env = {**os.environ, "WAYLAND_DISPLAY": WAYLAND_DISPLAY, "XDG_RUNTIME_DIR": XDG_RUNTIME_DIR}
@@ -438,6 +450,13 @@ body[data-screen] #deskscreen{display:flex}
 #screentoggle.on,#kbtoggle.on{background:var(--accent)!important;color:#fff!important}
 #deskkeys{display:flex;flex-wrap:wrap;gap:8px;padding:calc(env(safe-area-inset-top,0px) + 12px) 14px 8px;
   flex:1;align-content:center;justify-content:center}
+/* when the Tridactyl row shows up, everything else shrinks a bit instead of
+   scrolling or floating on top */
+body[data-trid] #deskkeys{gap:5px;padding-top:6px;padding-bottom:4px}
+body[data-trid] #deskkeys button{padding:8px 11px;font-size:.92em}
+body[data-trid] .deskgroup{padding:2px 0}
+body[data-trid] #arrows{grid-template-columns:repeat(3,38px);grid-auto-rows:38px}
+body[data-trid] #arrowrow #tpad2,body[data-trid] #arrowrow #tpadDrag{width:48px}
 body[data-screen] #deskkeys{flex:0 0 auto;padding-top:8px}   /* with the live screen on, it takes the top */
 #deskkeys button{background:var(--ui);color:var(--tx);border:0;border-radius:8px;padding:11px 15px;
   font:inherit;font-weight:600;min-width:46px;transition:transform .06s}
@@ -460,7 +479,7 @@ body[data-screen] #deskkeys{flex:0 0 auto;padding-top:8px}   /* with the live sc
    come last = closer to the thumb in a landscape grip */
 .deskgroup{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;flex:1 0 100%;padding:4px 0}
 #navgrp{border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:2px 0}
-#shortgrp button.flash,#medview button.flash{background:var(--accent)!important;color:#fff!important}
+#shortgrp button.flash,#medview button.flash,#tridgrp button.flash{background:var(--accent)!important;color:#fff!important}
 #kbin{position:fixed;bottom:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;
   resize:none;background:transparent;color:transparent;caret-color:transparent}
 #kbecho{position:fixed;top:0;left:0;right:0;z-index:9998;display:none;
@@ -504,6 +523,7 @@ body[data-screen] #deskkeys{flex:0 0 auto;padding-top:8px}   /* with the live sc
         <button data-char="2">2</button>
         <button data-char="3">3</button>
       </div>
+      <div class=deskgroup id=tridgrp style=display:none></div>
     </div>
     <div id=padrow>
       <div id=tpad>trackpad<br><small>drag to move · tap to click · 2 fingers to scroll</small></div>
@@ -571,7 +591,7 @@ function stopDeskScreen(){if(deskT){clearInterval(deskT);deskT=null;}}
   const clearMods=()=>{for(const k in mods)mods[k]=false;
     for(const b of document.querySelectorAll('#deskkeys button[data-mod]'))b.classList.remove('on');};
   // --- trackpad ---
-  let lx=0,ly=0,moved=false,t0=0,startFingers=1,lsy=0;
+  let lx=0,ly=0,moved=false,t0=0,startFingers=1,lsx=0,lsy=0;
   // --- "2nd finger": hold the button with the other thumb to simulate 2 fingers on the trackpad ---
   let held2=false;
   const tpad2=document.getElementById('tpad2');
@@ -593,9 +613,14 @@ function stopDeskScreen(){if(deskT){clearInterval(deskT);deskT=null;}}
     tpadDrag.addEventListener('mousedown',onD); tpadDrag.addEventListener('mouseup',offD); tpadDrag.addEventListener('mouseleave',offD);
   }
   tpad.addEventListener('touchstart',ev=>{ev.preventDefault();startFingers=held2?2:ev.targetTouches.length;
-    const t=ev.targetTouches[0];lx=t.clientX;ly=t.clientY;lsy=t.clientY;moved=false;t0=Date.now();},{passive:false});
+    const t=ev.targetTouches[0];lx=t.clientX;ly=t.clientY;lsx=t.clientX;lsy=t.clientY;moved=false;t0=Date.now();},{passive:false});
   tpad.addEventListener('touchmove',ev=>{ev.preventDefault();const t=ev.targetTouches[0];
-    if(held2||ev.targetTouches.length>=2){const dy=t.clientY-lsy;if(Math.abs(dy)>7){ptr({scroll:dy>0?-1:1});lsy=t.clientY;moved=true;}return;}
+    if(held2||ev.targetTouches.length>=2){
+      const dy=t.clientY-lsy, dx=t.clientX-lsx;
+      if(Math.abs(dy)>=Math.abs(dx)){ if(Math.abs(dy)>7){ptr({scroll:dy>0?-1:1});moved=true;} }
+      else { if(Math.abs(dx)>7){ptr({hscroll:dx>0?-1:1});moved=true;} }
+      lsx=t.clientX; lsy=t.clientY; return;
+    }
     const dx=t.clientX-lx,dy=t.clientY-ly;
     if(Math.abs(dx)>1||Math.abs(dy)>1){moved=true;ptr({dx:Math.round(dx*1.7),dy:Math.round(dy*1.7)});lx=t.clientX;ly=t.clientY;}},{passive:false});
   tpad.addEventListener('touchend',ev=>{ev.preventDefault();
@@ -609,6 +634,21 @@ function stopDeskScreen(){if(deskT){clearInterval(deskT);deskT=null;}}
     b.onclick=()=>{buzz(15); key(s.char?{char:s.char,mods:s.mods}:{key:s.key,mods:s.mods});
       b.classList.add('flash'); setTimeout(()=>b.classList.remove('flash'),120);};
     shortgrp.appendChild(b);}
+  // --- Tridactyl (Firefox/LibreWolf vim-style binds): shown only while LibreWolf is focused ---
+  const TRIDACTYL=[{lbl:'New Tab',chars:['t']},{lbl:'Close Tab',chars:['d']},
+    {lbl:'Prev Tab',chars:['g','T']},{lbl:'Next Tab',chars:['g','t']}];
+  const tridgrp=document.getElementById('tridgrp');
+  for(const s of TRIDACTYL){
+    const b=document.createElement('button'); b.textContent=s.lbl;
+    b.onclick=()=>{buzz(15); for(const ch of s.chars) key({char:ch});
+      b.classList.add('flash'); setTimeout(()=>b.classList.remove('flash'),120);};
+    tridgrp.appendChild(b);}
+  const pollWin=()=>fetch('/api/active-window').then(r=>r.json()).then(d=>{
+    const on=(d.class||'').toLowerCase()==='librewolf';
+    tridgrp.style.display=on?'flex':'none';
+    document.body.toggleAttribute('data-trid',on);
+  }).catch(()=>{});
+  pollWin(); setInterval(pollWin,1500);
   // --- hold arrow = repeat (long navigation/scroll without tapping repeatedly) ---
   for(const b of document.querySelectorAll('#arrows button.rep')){
     const k=b.dataset.key; let iv=null;
@@ -869,6 +909,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/api/active-window":
+            body = json.dumps({"class": active_window_class()}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/api/media-art":
             want = parse_qs(urlparse(self.path).query).get("player", [None])[0]
             fp = media_art_file(want)
@@ -924,6 +972,8 @@ class Handler(BaseHTTPRequestHandler):
                         MOUSE.write(e.EV_REL, e.REL_Y, int(d.get("dy", 0)))
                     if d.get("scroll"):
                         MOUSE.write(e.EV_REL, e.REL_WHEEL, int(d["scroll"]))
+                    if d.get("hscroll"):
+                        MOUSE.write(e.EV_REL, e.REL_HWHEEL, int(d["hscroll"]))
                     if "click" in d:
                         btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT,
                                "mid": e.BTN_MIDDLE}.get(d["click"])
