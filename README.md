@@ -28,6 +28,8 @@ either side.
   switch themes). Elsewhere it falls back to a built-in Yerba Mate palette
   that follows time of day.
 - Installable as a PWA (add to home screen) for a fullscreen, app-like feel.
+- Low-latency input path over WebSocket, with the old HTTP POST endpoints kept
+  as a fallback.
 
 ## Install
 
@@ -68,6 +70,9 @@ Env vars:
 - `HYPRPAD_PORT` — default `8123`.
 - `HYPRPAD_PASSWORD` — if set, requires login (cookie persists after).
 - `HYPRPAD_TOKEN` — alternative to password, pass as `?t=<token>`.
+
+Health/status:
+- `GET /api/status` returns JSON with `ok`, `ws`, `mouse`, and `keyboard`.
 
 ## Requirements
 

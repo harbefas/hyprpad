@@ -13,6 +13,7 @@ Then open http://<that-machine-ip>:8123 on your phone (same Wi-Fi).
 Setup uinput access once (udev rule + your user in the 'input' group),
 see README.md.
 """
+import base64
 import hashlib
 import json
 import mimetypes
@@ -34,6 +35,7 @@ PWHASH = hashlib.sha256(PASSWORD.encode()).hexdigest() if PASSWORD else ""
 WAYLAND_DISPLAY = os.environ.get("WAYLAND_DISPLAY", "wayland-1")
 XDG_RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
 OMARCHY_THEME_DIR = os.path.expanduser("~/.config/omarchy/current/theme")
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 def _mix(hex_a, hex_b, t):
@@ -165,6 +167,25 @@ def kbd_send(d):
     for k in reversed(mods):
         KBD.write(e.EV_KEY, k, 0)
     KBD.syn()
+
+
+def ptr_send(d):
+    """Injects into the virtual mouse. d: {dx,dy} | {scroll} | {hscroll} | {click,state?}."""
+    if not MOUSE:
+        return
+    if "dx" in d or "dy" in d:
+        MOUSE.write(e.EV_REL, e.REL_X, int(d.get("dx", 0)))
+        MOUSE.write(e.EV_REL, e.REL_Y, int(d.get("dy", 0)))
+    if d.get("scroll"):
+        MOUSE.write(e.EV_REL, e.REL_WHEEL, int(d["scroll"]))
+    if d.get("hscroll"):
+        MOUSE.write(e.EV_REL, e.REL_HWHEEL, int(d["hscroll"]))
+    if "click" in d:
+        btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT,
+               "mid": e.BTN_MIDDLE}.get(d["click"])
+        if btn is not None:
+            MOUSE.write(e.EV_KEY, btn, 1 if d.get("state", 1) else 0)
+    MOUSE.syn()
 
 
 # --- voice: record on the phone, transcribe + type here (lazy-loaded, optional) ---
@@ -584,8 +605,23 @@ function stopDeskScreen(){if(deskT){clearInterval(deskT);deskT=null;}}
 // ---------- use the phone as mouse + keyboard ----------
 (function(){
   const tpad=document.getElementById('tpad'); if(!tpad) return;
-  const ptr=o=>fetch('/ptr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o),keepalive:true}).catch(()=>{});
-  const key=o=>fetch('/key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o),keepalive:true}).catch(()=>{});
+  let ws=null,wsReady=false,wsRetry=null;
+  const post=(path,o)=>fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o),keepalive:true}).catch(()=>{});
+  const connectWs=()=>{
+    if(ws&&(ws.readyState===WebSocket.OPEN||ws.readyState===WebSocket.CONNECTING))return;
+    try{ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws'+location.search);}
+    catch(_){return;}
+    ws.onopen=()=>{wsReady=true;};
+    ws.onclose=()=>{wsReady=false;ws=null;clearTimeout(wsRetry);wsRetry=setTimeout(connectWs,1000);};
+    ws.onerror=()=>{try{ws.close();}catch(_){};};
+  };
+  const send=(type,path,o)=>{
+    if(wsReady){try{ws.send(JSON.stringify({type:type,data:o}));return;}catch(_){}}
+    post(path,o);connectWs();
+  };
+  connectWs();
+  const ptr=o=>send('ptr','/ptr',o);
+  const key=o=>send('key','/key',o);
   const mods={ctrl:false,alt:false,super:false};
   const activeMods=()=>Object.keys(mods).filter(k=>mods[k]);
   const clearMods=()=>{for(const k in mods)mods[k]=false;
@@ -867,12 +903,83 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._login_page("Wrong password")
 
+    def _ws_send(self, opcode, payload=b""):
+        if isinstance(payload, str):
+            payload = payload.encode()
+        if len(payload) < 126:
+            header = bytes([0x80 | opcode, len(payload)])
+        elif len(payload) < 65536:
+            header = bytes([0x80 | opcode, 126]) + struct.pack("!H", len(payload))
+        else:
+            header = bytes([0x80 | opcode, 127]) + struct.pack("!Q", len(payload))
+        self.connection.sendall(header + payload)
+
+    def _ws_read_exact(self, n):
+        data = self.rfile.read(n)
+        if len(data) != n:
+            raise EOFError
+        return data
+
+    def _ws_read_frame(self):
+        b1, b2 = self._ws_read_exact(2)
+        opcode = b1 & 0x0f
+        masked = b2 & 0x80
+        length = b2 & 0x7f
+        if length == 126:
+            length = struct.unpack("!H", self._ws_read_exact(2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", self._ws_read_exact(8))[0]
+        if length > 65536:
+            raise ValueError("websocket frame too large")
+        mask = self._ws_read_exact(4) if masked else b"\0\0\0\0"
+        payload = self._ws_read_exact(length) if length else b""
+        if masked:
+            payload = bytes(c ^ mask[i % 4] for i, c in enumerate(payload))
+        return opcode, payload
+
+    def _ws_dispatch(self, payload):
+        msg = json.loads(payload.decode("utf-8"))
+        typ = msg.get("type")
+        data = msg.get("data") or {}
+        if typ == "ptr":
+            ptr_send(data)
+        elif typ == "key":
+            kbd_send(data)
+
+    def _websocket(self):
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if self.headers.get("Upgrade", "").lower() != "websocket" or not key:
+            self.send_response(400); self.end_headers(); return
+        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        self.protocol_version = "HTTP/1.1"
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        self.close_connection = True
+        self.connection.settimeout(300)
+        while True:
+            try:
+                opcode, payload = self._ws_read_frame()
+                if opcode == 0x1:
+                    self._ws_dispatch(payload)
+                elif opcode == 0x8:
+                    self._ws_send(0x8)
+                    break
+                elif opcode == 0x9:
+                    self._ws_send(0xA, payload)
+            except Exception:
+                break
+
     def do_GET(self):
         path = urlparse(self.path).path
         if not self._authed():
             if PASSWORD and (path == "/" or path == ""):
                 return self._login_page()
             return self._deny()
+        if path == "/ws":
+            return self._websocket()
         if path == "/" or path == "":
             css, mode = omarchy_theme()
             page = PAGE.replace("/*OMARCHY_VARS*/", css or "")
@@ -911,6 +1018,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/active-window":
             body = json.dumps({"class": active_window_class()}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api/status":
+            body = json.dumps({"ok": True, "ws": True, "mouse": bool(MOUSE), "keyboard": bool(KBD)}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
@@ -966,20 +1081,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/ptr":
             try:
-                if MOUSE:
-                    if "dx" in d or "dy" in d:
-                        MOUSE.write(e.EV_REL, e.REL_X, int(d.get("dx", 0)))
-                        MOUSE.write(e.EV_REL, e.REL_Y, int(d.get("dy", 0)))
-                    if d.get("scroll"):
-                        MOUSE.write(e.EV_REL, e.REL_WHEEL, int(d["scroll"]))
-                    if d.get("hscroll"):
-                        MOUSE.write(e.EV_REL, e.REL_HWHEEL, int(d["hscroll"]))
-                    if "click" in d:
-                        btn = {"left": e.BTN_LEFT, "right": e.BTN_RIGHT,
-                               "mid": e.BTN_MIDDLE}.get(d["click"])
-                        if btn is not None:
-                            MOUSE.write(e.EV_KEY, btn, 1 if d.get("state", 1) else 0)
-                    MOUSE.syn()
+                ptr_send(d)
                 self.send_response(204); self.end_headers()
             except Exception:
                 self.send_response(400); self.end_headers()
