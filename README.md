@@ -1,8 +1,9 @@
 # hyprpad
 
 Turn your phone into a mouse, keyboard and trackpad for a Wayland desktop
-(Hyprland/Sway). Open a page in your phone's browser, no app to install on
-either side.
+(Hyprland/Sway). Open a page in your phone's browser, nothing to install on
+either side. Most existing phone-remote tools assume Windows or need a
+companion app on both ends; this is neither.
 
 <img src="assets/demo.gif" alt="hyprpad demo" width="360">
 
@@ -107,7 +108,8 @@ Health/status:
 
 ## Why
 
-Existing phone-remote tools are mostly Windows-first or need a companion app
-on both ends. This is a single Python file, browser-only, built on plain
-`uinput` (works under any Wayland compositor, tested on Hyprland) — no
-cloud, no account, no install beyond opening a URL.
+The whole thing is a single Python file, browser-only, built on plain
+`uinput` (works under any Wayland compositor, tested on Hyprland). No cloud,
+no account, no install beyond opening a URL — and short enough to read in
+one sitting if you want to know exactly what it does before pointing it at
+your keyboard.
